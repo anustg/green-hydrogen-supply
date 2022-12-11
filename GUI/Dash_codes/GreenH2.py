@@ -94,6 +94,7 @@ server=app.server
 
 
 
+
 app.layout = html.Div([
             dbc.Row(dbc.Col(html.H1('Green H2'),
                             width={'size':6, 'offset':5}
