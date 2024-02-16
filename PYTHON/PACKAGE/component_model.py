@@ -5,7 +5,7 @@ Created on Fri May  6 12:46:54 2022
 @author: Ahmad Mojiri
 """
 from projdirs import datadir
-
+import os
 import numpy as np
 import pandas as pd
 import json, io, requests, platform
@@ -24,23 +24,37 @@ def pv_gen(capacity):
     pv = PVWatts.new()
     
     
-    dir = datadir + ['\SAM_INPUTS\SOLAR\\', '/SAM_INPUTS/SOLAR/'][platform.system()=='Linux']
-    file_name = ['pvfarm_pvwattsv8_win','pvfarm_pvwattsv8_linux'][platform.system()=='Linux']
+    #dir = datadir + ['\SAM_INPUTS\SOLAR\\', '/SAM_INPUTS/SOLAR/'][platform.system()=='Linux']
+    #file_name = ['pvfarm_pvwattsv8_win','pvfarm_pvwattsv8_linux'][platform.system()=='Linux']
     module = pv
     
-    with open(dir + file_name + ".json", 'r') as file:
-        data = json.load(file)
-        for k,v in data.items():
-            if k != "number_inputs":
-                module.value(k, v)
+    dir = datadir + os.sep + 'SAM_INPUTS' + os.sep + 'SOLAR' + os.sep 
     
-    # module.SystemDesign.system_capacity = capacity
-    pv.execute()
-    output = np.array(pv.Outputs.gen)
-    return(output.tolist())
+    df = pd.read_csv(dir + 'SolarSource.csv', skiprows=0,low_memory=False)
+    num_year = int((len(df)-2)/8760)
+    Output = np.array([])
+    for i in range(1,num_year+1):
+        new_df = pd.concat([df.iloc[0:2], df.iloc[2+8760*(i-1):2+8760*i]])
+        new_df.to_csv(dir + 'SolarSource1.csv',index=False, lineterminator='\n')
+    
+        file_name = 'pvfarm_pvwattsv8'
+        with open(dir + file_name + ".json", 'r') as file:
+            data = json.load(file)
+            data['solar_resource_file'] = dir + 'SolarSource1.csv'
+            for k,v in data.items():
+                if k != "number_inputs":
+                    module.value(k, v)
+        pv.execute()
+        output = np.array(pv.Outputs.gen)
+        Output = np.append(Output,output)
+        os.remove(dir + 'SolarSource1.csv')
+    
+    print ('pv_gen finishes')
+    
+    return(Output.tolist())
 
 #################################################################
-def wind_gen(hub_height=150):
+def wind_gen(loc,hub_height=150):
     """
     Parameters
     ----------
@@ -49,22 +63,35 @@ def wind_gen(hub_height=150):
     Returns wind powr generated in W for each hour in a year
     
     """
-    wind = Windpower.new()
+    dir = datadir + os.sep + 'SAM_INPUTS' + os.sep + 'WIND' + os.sep 
+    if not os.path.exists(dir + os.sep + 'SAM_results'):
+        os.mkdir(dir + os.sep + 'SAM_results')
     
-    dir = datadir + ['\SAM_INPUTS\WIND\\', '/SAM_INPUTS/WIND/'][platform.system()=='Linux']
-    file_name = ['windfarm_windpower_win','windfarm_windpower_linux'][platform.system()=='Linux']
-    module = wind
-    
-    with open(dir + file_name + ".json", 'r') as file:
-        data = json.load(file)
-        for k,v in data.items():
-            if k != "number_inputs":
-                module.value(k, v)
-    file.close()
-    # module.SystemDesign.system_capacity = capacity
-    wind.Turbine.wind_turbine_hub_ht = hub_height
-    wind.execute()
-    output = np.array(wind.Outputs.gen)
+    if not os.path.exists(dir + os.sep + 'SAM_results' + os.sep + loc + '.csv'):
+        wind = Windpower.new()
+        
+        #dir = datadir + ['\SAM_INPUTS\WIND\\', '/SAM_INPUTS/WIND/'][platform.system()=='Linux']
+        #file_name = ['windfarm_windpower_win','windfarm_windpower_linux'][platform.system()=='Linux']
+        module = wind
+        file_name = 'windfarm_windpower'
+        
+        with open(dir + file_name + ".json", 'r') as file:
+            data = json.load(file)
+            data['wind_resource_filename'] = dir + 'WindSource.srw'
+            for k,v in data.items():
+                if k != "number_inputs":
+                    module.value(k, v)
+        file.close()
+        # module.SystemDesign.system_capacity = capacity
+        wind.Turbine.wind_turbine_hub_ht = hub_height
+        wind.execute()
+        output = np.array(wind.Outputs.gen)
+        np.savetxt(dir + os.sep + 'SAM_results' + os.sep + loc + '.csv', output, delimiter=',')
+    else:
+        print ('skip PySAM for wind for %s'%loc)
+        output = np.loadtxt(dir + os.sep + 'SAM_results' + os.sep + loc + '.csv', delimiter=',')
+        
+    print ('wind_gen finishes for %s'%loc)
     return(output.tolist())
 
 #################################################################
@@ -112,16 +139,16 @@ def SolarResource(Location):
 
     """
     WD_file = 'weather_data_%s.csv'%(Location)
-    path = r'C:\Nextcloud\HILT-CRC---Green-Hydrogen\DATA\SAM_INPUTS\WEATHER_DATA'
-    data = pd.read_csv(path + "\%s"%(WD_file))
+    parent_directory = os.path.dirname(os.getcwd())
+    path = parent_directory + os.sep + 'DATA' + os.sep + 'SAM_INPUTS' + os.sep + 'WEATHER_DATA'    
+    data = pd.read_csv(path + os.sep + WD_file,low_memory=False)
+    data_text = data.to_csv(index=False, lineterminator='\n')
+    path = parent_directory + os.sep + 'DATA' + os.sep + 'SAM_INPUTS' + os.sep + 'SOLAR'
     
-    data_text = data.to_csv(index=False, line_terminator='\n')
-    path = r'C:\Nextcloud\HILT-CRC---Green-Hydrogen\DATA\SAM_INPUTS\SOLAR'
-    
-    text_file = open(path + "\SolarSource.csv", "w")
+    text_file = open(path + os.sep + "SolarSource.csv", "w")
     text_file.write(data_text)
     text_file.close()
-    print('Solar data file was generated from Solcast database!')
+    #print('Solar data file was generated from Solcast database!')
 
  #################################################################
 def WindSource(Location):
@@ -135,11 +162,12 @@ def WindSource(Location):
     
     """
     WD_file = 'weather_data_%s.csv'%(Location)
-    path = r'C:\Nextcloud\HILT-CRC---Green-Hydrogen\DATA\SAM_INPUTS\WEATHER_DATA'
-    data = pd.read_csv(path + "\%s"%(WD_file), skiprows=0)
+    parent_directory = os.path.dirname(os.getcwd())
+    path = parent_directory + os.sep + 'DATA' + os.sep + 'SAM_INPUTS' + os.sep + 'WEATHER_DATA'    
+    data = pd.read_csv(path + os.sep + WD_file, skiprows=0)
     Lat = data.lat[0]
     Lon = data.lon[0]
-    data = pd.read_csv(path + "\%s"%(WD_file), skiprows=2)
+    data = pd.read_csv(path + os.sep + WD_file, skiprows=2)
     
     data_10 = data.iloc[:,[5,14,15,16]].copy()
     data_10.Pressure=data_10.Pressure/1013.25
@@ -209,7 +237,8 @@ def WindSource(Location):
     data.sort_index(inplace=True)
     
     data_text = data.to_csv(header=False, index=False, line_terminator='\n')
-    path = r'C:\Nextcloud\HILT-CRC---Green-Hydrogen\DATA\SAM_INPUTS\WIND'
+    
+    path = parent_directory + os.sep + 'DATA' + os.sep + 'SAM_INPUTS' + os.sep + 'WIND'
     
     text_file = open(path + "\WindSource.csv", "w")
     text_file.write(data_text)
@@ -228,11 +257,13 @@ def WindSource_windlab(Location):
     
     """
     WD_file = 'weather_data_%s.csv'%(Location)
-    path = r'C:\Nextcloud\HILT-CRC---Green-Hydrogen\DATA\SAM_INPUTS\WEATHER_DATA'
-    data = pd.read_csv(path + "\%s"%(WD_file), skiprows=0)
+    
+    parent_directory = os.path.dirname(os.getcwd())
+    path = parent_directory + os.sep + 'DATA' + os.sep + 'SAM_INPUTS' + os.sep + 'WEATHER_DATA'    
+    data = pd.read_csv(path + os.sep + WD_file, skiprows=0,low_memory=False)
     Lat = data.lat[0]
     Lon = data.lon[0]
-    data = pd.read_csv(path + "\%s"%(WD_file), skiprows=2)
+    data = pd.read_csv(path + os.sep + WD_file, skiprows=2)
     
     data_150 = data.iloc[:,[5,14,15,16]].copy()
     data_150.Pressure=data_150.Pressure/1013.25
@@ -244,7 +275,9 @@ def WindSource_windlab(Location):
                                'S':["Speed", 'm/s',150],
                                'D':["Direction",'degrees',150],
                                'P':['Pressure','atm',150]})
-    data_150 = heading_150.append(data_150).reset_index(drop=True)
+    #data_150 = heading_150.append(data_150).reset_index(drop=True) # I got a warning for this sentence
+    data_150 = pd.concat([heading_150, data_150], ignore_index=True)
+    
     data = data_150.copy()
     Z_anem = 150
     
@@ -253,8 +286,12 @@ def WindSource_windlab(Location):
     data_10.iloc[2,:]=Z
     data_temp = data_10.iloc[3:].copy()
     S = data_temp.apply(lambda x:speed(Z, Z_anem, data_temp['S']) )
-    data_temp.S = S
-    data_10 = data_10.iloc[0:3].append(data_temp,ignore_index=True)
+
+    #data_temp.S = S # this sentence does not work in my computer
+    data_temp.S = S.S
+    #data_10 = data_10.iloc[0:3].append(data_temp,ignore_index=True)
+    data_10 = pd.concat([data_10.iloc[0:3], data_temp], ignore_index=True)
+    
     data = pd.concat([data , data_10],axis=1)
     
         
@@ -265,13 +302,12 @@ def WindSource_windlab(Location):
     data.index = data.index+1
     data.sort_index(inplace=True)
     
-    data_text = data.to_csv(header=False, index=False, line_terminator='\n')
-    path = r'C:\Nextcloud\HILT-CRC---Green-Hydrogen\DATA\SAM_INPUTS\WIND'
-    
-    text_file = open(path + "\WindSource.csv", "w")
+    data_text = data.to_csv(header=False, index=False, lineterminator='\n')
+    path = parent_directory + os.sep + 'DATA' + os.sep + 'SAM_INPUTS' + os.sep + 'WIND'
+    text_file = open(path + os.sep + "WindSource.srw", "w") # I got an error if use ./csv format for wind source
     text_file.write(data_text)
     text_file.close()
-    print("Wind source data file was generated from Windlab database!")    
+    #print("Wind source data file was generated from Windlab database!")    
 
  #################################################################
 def speed(Z,Z_anem,U_anem):

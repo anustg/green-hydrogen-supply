@@ -1,8 +1,14 @@
 % Use this editor as a MiniZinc scratch book
 int: N;
+int: n_PV;
+int: n_wind;
+int: n_project;    %project length
 
 set of int: tint = 1..N;     %number of intervals
 set of int: tsamp = 1..N+1;    %number of sample points
+set of int: N_PV = 1..n_PV;    %number of PV farms
+set of int: N_wind = 1..n_wind;    %number of wind farms
+set of int: N_project = 1..n_project;    %number of project year 
 
 float: DT;      %time difference between sample points (also, interval length) (s)
 float: EL_ETA;  %conversion efficiency of the electrolyser (kgH/s/kW)
@@ -21,19 +27,36 @@ float: RES_H_CAPA;       %virtual hydrogen reserve for reduced capacity factor (
 float: PV_REF;    %power capacity of the reference PV plant (kW)
 float: WIND_REF;    %power capacity of the reference wind plant (kW)
 
+float: DIS_RATE;    %discount rate 8%
+float: OM_EL;    % O&M for electrolyzer ($/kw)
+float: OM_PV;    % O&M for PV ($/kw)
+float: OM_WIND;    % O&M for wind ($/kw)
+float: OM_UG;     % O&M for underground hydrogen storage
+float: crf; %capital recovery factor
+float: H_total; %annual hydrogen generation kg/year
+float: C_pipe; % pipe transportation cost (USD)
+
 array[tint] of float: LOAD; %load timeseries (kg of H per hour)
-array[tint] of var float: PV_REF_POUT;    %power output from the reference PV plant (kW)
-array[tint] of var float: WIND_REF_POUT;    %power output from the reference wind plant (kW)
+array[N_PV, tint] of float: PV_REF_POUT;  %power output from the reference PV plant (kW)
+array[N_wind, tint] of float: WIND_REF_POUT;  %power output from the reference wind plant (kW)
+
+array[N_PV] of float: C_PV_t;  %tranmission cost for PV (/kW)
+array[N_wind] of float: C_wind_t;  %tranmission cost for wind(/kW)
+array[N_PV] of float: Area;    %Available land area
+
 
 % === VARIABLES ===
-var float: pv_max;    %PV plant rated power (kW)
 var float: wind_max;     %wind farm rated power (kW)
+var float: pv_max;     %wind farm rated power (kW)
 var float: el_max;     %electrolyser rated power (kW)
 var float: ug_storage_capa;    %capacity of hydrogen storage cavern (kg of H2)
 var float: pipe_storage_capa;  %capacity of hydrogen storage in the pipeline (kg of H2)
 var float: bat_e_capa;    %energy capacity of the electrochemical battery (kWh)
 var float: bat_p_max;    %power capacity of the electrochemical battery (kW)
+var float: C_trans;    %transmission cost
 
+array[N_PV] of var float: pv_max_array;    %an array of PV plant rated power values: nodes number of (kW)
+array[N_wind] of var float: wind_max_array;    %an array of PV plant rated power values: nodes number of (kW)
 array[tint] of var float: pv_pout;    %power out of PV plant (kW)
 array[tint] of var float: wind_pout;     %power out of wind farm (kW)
 array[tint] of var float: curtail_p;    %curtailed power (kW)
@@ -55,28 +78,40 @@ array[tsamp] of var float: bat_e;  %electrical energy stored in the battery (kWh
 
 
 var float: capex;
+var float: lcoh; % LCOH in USD/kg
+var float: FOM_PV; %USD/kW.year
+var float: FOM_WIND; %USD/kW.year
+var float: FOM_EL; %USD/kW.year
+var float: FOM_UG; %USD/kg.year
+var float: OF;
 
-capex = C_PV * pv_max + C_WIND * wind_max + C_EL * el_max + C_UG_STORAGE * ug_storage_capa + C_PIPE_STORAGE * pipe_storage_capa + C_BAT_ENERGY * bat_e_capa + C_BAT_POWER * bat_p_max;
+OF = (C_PV + OM_PV/crf) * pv_max + (C_WIND + OM_WIND/crf) * wind_max + (C_EL + OM_EL/crf) * el_max + (C_UG_STORAGE + OM_UG/crf) * ug_storage_capa + C_PIPE_STORAGE * pipe_storage_capa + C_BAT_ENERGY * bat_e_capa + C_BAT_POWER * bat_p_max + C_trans + C_pipe;
 
 %=== CONSTRAINTS ===
+constraint capex = C_PV * pv_max + C_WIND * wind_max + C_EL * el_max + C_UG_STORAGE * ug_storage_capa + C_PIPE_STORAGE * pipe_storage_capa + C_BAT_ENERGY * bat_e_capa + C_BAT_POWER * bat_p_max + C_trans + C_pipe;
+constraint FOM_PV = pv_max * OM_PV; 
+constraint FOM_WIND = wind_max * OM_WIND; 
+constraint FOM_EL = el_max * OM_EL; 
+constraint FOM_UG = ug_storage_capa * OM_UG;
+constraint lcoh = (crf * capex + FOM_PV + FOM_WIND + FOM_EL + FOM_UG)/H_total;
 constraint res_h_level[1] = RES_H_CAPA;
 constraint ug_storage_level[1] = ug_storage_level[N];
 constraint pipe_storage_level[1] = pipe_storage_level[N];
 constraint bat_e[1] = bat_e[N];
-
-constraint pv_max >= 0;
-constraint wind_max >= 0;
+constraint pv_max = sum(j in N_PV)(pv_max_array[j]);
+constraint wind_max = sum(j in N_wind)(wind_max_array[j]);
 constraint el_max >= 0;
 constraint ug_storage_capa >= 0;
 constraint ug_storage_capa <= UG_STORAGE_CAPA_MAX;
 constraint pipe_storage_capa >= PIPE_STORAGE_CAPA_MIN;
-
-
 constraint bat_e_capa >= 0;
+constraint C_trans = sum(j in N_PV)(C_PV_t[j]*pv_max_array[j]) + sum(j in N_wind)(C_wind_t[j]*wind_max_array[j]);
 
-constraint forall(  i in tint  )(  pv_pout[i] = pv_max/PV_REF * PV_REF_POUT[i]  );
-constraint forall(  i in tint  )(  wind_pout[i] = wind_max/WIND_REF * WIND_REF_POUT[i]  );
-
+constraint forall(  j in N_PV  )(  pv_max_array[j] >=0 );
+constraint forall(  j in N_wind  )(  wind_max_array[j] >=0 );
+constraint forall(  j in N_wind  )(  wind_max_array[j]/1e3/5.2 + pv_max_array[j]/1e3/29.5 <= Area[j] );
+constraint forall(  i in tint  )(  pv_pout[i] = sum(j in N_PV)(pv_max_array[j]/PV_REF * PV_REF_POUT[j,i]) );
+constraint forall(  i in tint  )(  wind_pout[i] = sum(j in N_wind)(wind_max_array[j]/WIND_REF * WIND_REF_POUT[j,i]) );
 constraint forall(  i in tint  )(  pv_pout[i] + wind_pout[i] - curtail_p[i] - el_pin_pvwind[i] - bat_pin[i] = 0  );
 constraint forall(  i in tint  )(  curtail_p[i] >= 0  );
 
@@ -87,7 +122,7 @@ constraint forall(  i in tint  )(  bat_pin[i] - bat_p_max <= 0 );
 
 constraint forall(  i in tint  )(  bat_pout[i] >= 0 );
 constraint forall(  i in tint  )(  bat_pout[i] - bat_p_max <= 0 );
-
+constraint forall(  i in tint  )(  el_pin[i] >= 0  );
 constraint forall(  i in tint  )(  el_pin_pvwind[i] >= 0  );
 constraint forall(  i in tint  )(  el_pin_pvwind[i] + bat_pout[i] - comp1_pin[i] - comp2_pin[i] - el_max <= 0  );
 
@@ -108,6 +143,7 @@ constraint forall(  i in tint  )(   comp1_hflow[i] = el_pin[i]/3600* EL_ETA/ 39.
 constraint forall(  i in tint  )(   comp2_hflow[i] >= 0  );
 constraint forall(  i in tint  )(   comp2_hflow[i] <= el_max/3600* EL_ETA/ 39.4  );
 
+constraint forall(  i in tint  )(   (comp2_hflow[i] + ug_storage_hout[i] )*DT*3600 <= ug_storage_capa );
 constraint forall(  i in tint  )(   ug_storage_level[i+1] = ug_storage_level[i] + (comp2_hflow[i] - ug_storage_hout[i] )*DT*3600  );
 constraint forall(  i in tint  )(   pipe_storage_level[i+1] = pipe_storage_level[i] + (comp1_hflow[i] - pipe_storage_hout[i] - comp2_hflow[i]) *DT*3600  );
 
@@ -122,15 +158,15 @@ constraint forall(  i in tint  )(  res_h_level[i+1] = res_h_level[i] - res_hout[
 constraint forall(  i in tint  )(  res_hout[i] >= 0  );
 constraint forall(  i in tint  )(  res_hout[i] <= LOAD[i]  );
 
-
-
-solve minimize capex;
+solve minimize OF;
 
 output  ["!"] ++
         ["N="] ++ [show(N)] ++ [";"] ++
         ["CAPEX="] ++ [show(capex)] ++ [";"] ++
         ["pv_max="] ++ [show(pv_max)] ++ [";"] ++
         ["wind_max="] ++ [show(wind_max)] ++ [";"] ++
+        ["pv_max_array="] ++ [show(pv_max_array)] ++ [";"] ++
+        ["wind_max_array="] ++ [show(wind_max_array)] ++ [";"] ++
         ["el_max="] ++ [show(el_max)] ++ [";"] ++
         ["ug_storage_capa="] ++ [show(ug_storage_capa)] ++ [";"]++
         ["pipe_storage_capa="] ++ [show(pipe_storage_capa)] ++ [";"]++
@@ -147,6 +183,7 @@ output  ["!"] ++
         ["comp2_hflow="] ++ [show(comp2_hflow)] ++ [";"] ++
         ["comp2_pin="] ++ [show(comp2_pin)] ++ [";"] ++
         ["res_hout="] ++ [show(res_hout)] ++ [";"] ++
+        ["el_pin_pvwind="] ++ [show(el_pin_pvwind)] ++ [";"] ++
         ["pipe_storage_hout="] ++ [show(pipe_storage_hout)] ++ [";"] ++
         ["ug_storage_hout="] ++ [show(ug_storage_hout)] ++ [";"] ++
         ["ug_storage_level="] ++ [show(ug_storage_level)] ++ [";"] ++
@@ -154,5 +191,13 @@ output  ["!"] ++
         ["reserve_h_level="] ++ [show(res_h_level)] ++ [";"] ++
         ["bat_e="] ++ [show(bat_e)] ++ [";"] ++
         ["LOAD="] ++ [show(LOAD)] ++ [";"] ++
+        ["C_trans="] ++ [show(C_trans)] ++ [";"] ++
+        ["C_pipe="] ++ [show(C_pipe)] ++ [";"] ++
+        ["lcoh="] ++ [show(lcoh)] ++ [";"] ++
+        ["FOM_PV="] ++ [show(FOM_PV)] ++ [";"] ++
+        ["FOM_WIND="] ++ [show(FOM_WIND)] ++ [";"] ++
+        ["FOM_EL="] ++ [show(FOM_EL)] ++ [";"] ++
+        ["FOM_UG="] ++ [show(FOM_UG)] ++ [";"] ++
+        ["H_total="] ++ [show(H_total)] ++ [";"] ++
         ["!"];
 
